@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
-import { readTable, writeTable, readRaw } from "./storage.js";
+import { readTable, writeTable } from "./storage.js";
 
 const FONTS_IMPORT =
   "@import url('https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');";
@@ -42,8 +42,7 @@ const TABLES = {
   projects: "projects",
   tasks: "tasks",
   entries: "time-entries",
-  timesheetRows: "timesheet-rows",
-  hiddenRows: "timesheet-hidden-rows",
+  shownRows: "timesheet-shown-rows",
 };
 
 const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -83,6 +82,10 @@ export function getCurrentMonthRange(refDate = new Date()) {
   const from = new Date(refDate.getFullYear(), refDate.getMonth(), 1);
   const to = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0);
   return { from: fmtISO(from), to: fmtISO(to) };
+}
+
+export function getPreviousMonthRange(refDate = new Date()) {
+  return getCurrentMonthRange(new Date(refDate.getFullYear(), refDate.getMonth() - 1, 1));
 }
 
 async function safeRead(key) {
@@ -215,7 +218,7 @@ function Tabs({ tab, setTab }) {
     { id: "clients", label: "Clients" },
     { id: "projects", label: "Projects" },
     { id: "tasks", label: "Tasks" },
-    { id: "reports", label: "Reports" },
+    { id: "reports", label: "Report" },
   ];
   return (
     <div style={{ display: "flex", gap: 4 }}>
@@ -290,8 +293,7 @@ export default function TallyApp() {
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [entries, setEntries] = useState([]);
-  const [timesheetRows, setTimesheetRows] = useState([]);
-  const [hiddenRows, setHiddenRows] = useState([]);
+  const [shownRows, setShownRows] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [tab, setTab] = useState("timesheet");
@@ -299,12 +301,12 @@ export default function TallyApp() {
 
   useEffect(() => {
     (async () => {
-      const [c, p, tRaw, eRaw, hiddenRaw] = await Promise.all([
+      const [c, p, tRaw, eRaw, shownRaw] = await Promise.all([
         safeRead(TABLES.clients),
         safeRead(TABLES.projects),
         safeRead(TABLES.tasks),
         safeRead(TABLES.entries),
-        safeRead(TABLES.hiddenRows),
+        safeRead(TABLES.shownRows),
       ]);
 
       // Migrate legacy data: tasks used to have a single `projectId`; entries had
@@ -331,33 +333,11 @@ export default function TallyApp() {
         })
         .filter((entry) => entry.projectId);
 
-      // The timesheet used to show every task-project pairing automatically.
-      // It's now an explicit, persistent selection. On first load (no selection
-      // ever saved), seed it from the existing pairings so nothing that was
-      // previously visible silently disappears.
-      let rowsRaw = null;
-      try {
-        rowsRaw = await readRaw(TABLES.timesheetRows);
-      } catch (e) {
-        rowsRaw = null;
-      }
-      let initialRows;
-      if (rowsRaw === null) {
-        initialRows = [];
-        for (const t of migratedTasks) {
-          for (const pid of t.projectIds || []) initialRows.push({ taskId: t.id, projectId: pid });
-        }
-        safeWrite(TABLES.timesheetRows, initialRows);
-      } else {
-        initialRows = rowsRaw;
-      }
-
       setClients(c || []);
       setProjects(p || []);
       setTasks(migratedTasks);
       setEntries(migratedEntries);
-      setTimesheetRows(initialRows);
-      setHiddenRows(hiddenRaw || []);
+      setShownRows(shownRaw || []);
       setLoaded(true);
 
       if (tasksChanged) safeWrite(TABLES.tasks, migratedTasks);
@@ -371,29 +351,29 @@ export default function TallyApp() {
   }, []);
 
   const addToTimesheet = (taskId, projectId, weekKey) => {
-    if (!timesheetRows.some((r) => r.taskId === taskId && r.projectId === projectId)) {
-      const nextRows = [...timesheetRows, { taskId, projectId }];
-      setTimesheetRows(nextRows);
-      persist(TABLES.timesheetRows, nextRows);
-    }
-    // Adding a task back also un-hides it for the week it was added from,
-    // in case it had previously been hidden just for that week.
-    if (weekKey) {
-      const nextHidden = hiddenRows.filter(
-        (h) => !(h.weekKey === weekKey && h.taskId === taskId && h.projectId === projectId)
-      );
-      if (nextHidden.length !== hiddenRows.length) {
-        setHiddenRows(nextHidden);
-        persist(TABLES.hiddenRows, nextHidden);
-      }
-    }
+    if (shownRows.some((r) => r.weekKey === weekKey && r.taskId === taskId && r.projectId === projectId)) return;
+    const next = [...shownRows, { id: uid(), weekKey, taskId, projectId }];
+    setShownRows(next);
+    persist(TABLES.shownRows, next);
   };
 
   const hideForWeek = (taskId, projectId, weekKey) => {
-    if (hiddenRows.some((h) => h.weekKey === weekKey && h.taskId === taskId && h.projectId === projectId)) return;
-    const next = [...hiddenRows, { id: uid(), weekKey, taskId, projectId }];
-    setHiddenRows(next);
-    persist(TABLES.hiddenRows, next);
+    const next = shownRows.filter(
+      (r) => !(r.weekKey === weekKey && r.taskId === taskId && r.projectId === projectId)
+    );
+    setShownRows(next);
+    persist(TABLES.shownRows, next);
+  };
+
+  const addMultipleToTimesheet = (pairs, weekKey) => {
+    const existing = new Set(
+      shownRows.filter((r) => r.weekKey === weekKey).map((r) => `${r.taskId}|${r.projectId}`)
+    );
+    const toAdd = pairs.filter((p) => !existing.has(`${p.taskId}|${p.projectId}`));
+    if (toAdd.length === 0) return;
+    const next = [...shownRows, ...toAdd.map((p) => ({ id: uid(), weekKey, taskId: p.taskId, projectId: p.projectId }))];
+    setShownRows(next);
+    persist(TABLES.shownRows, next);
   };
 
   const addClient = (name) => {
@@ -416,6 +396,10 @@ export default function TallyApp() {
 
   const deleteClient = (id) => {
     const removedProjectIds = projects.filter((p) => p.clientId === id).map((p) => p.id);
+    if (entries.some((e) => removedProjectIds.includes(e.projectId) && e.invoiced)) {
+      setError("Can't delete this client — one of its projects has invoiced time entries. Unmark them as invoiced first if you need to remove it.");
+      return;
+    }
     const nextClients = clients.filter((c) => c.id !== id);
     const nextProjects = projects.filter((p) => p.clientId !== id);
     const nextTasks = tasks.map((t) => ({
@@ -423,20 +407,17 @@ export default function TallyApp() {
       projectIds: (t.projectIds || []).filter((pid) => !removedProjectIds.includes(pid)),
     }));
     const nextEntries = entries.filter((e) => !removedProjectIds.includes(e.projectId));
-    const nextTimesheetRows = timesheetRows.filter((r) => !removedProjectIds.includes(r.projectId));
-    const nextHiddenRows = hiddenRows.filter((h) => !removedProjectIds.includes(h.projectId));
+    const nextShownRows = shownRows.filter((r) => !removedProjectIds.includes(r.projectId));
     setClients(nextClients);
     setProjects(nextProjects);
     setTasks(nextTasks);
     setEntries(nextEntries);
-    setTimesheetRows(nextTimesheetRows);
-    setHiddenRows(nextHiddenRows);
+    setShownRows(nextShownRows);
     persist(TABLES.clients, nextClients);
     persist(TABLES.projects, nextProjects);
     persist(TABLES.tasks, nextTasks);
     persist(TABLES.entries, nextEntries);
-    persist(TABLES.timesheetRows, nextTimesheetRows);
-    persist(TABLES.hiddenRows, nextHiddenRows);
+    persist(TABLES.shownRows, nextShownRows);
   };
 
   const addProject = (name, clientId, budgetAmount, hourlyRate, color) => {
@@ -462,21 +443,22 @@ export default function TallyApp() {
   };
 
   const deleteProject = (id) => {
+    if (entries.some((e) => e.projectId === id && e.invoiced)) {
+      setError("Can't delete this project — it has invoiced time entries. Unmark them as invoiced first if you need to remove it.");
+      return;
+    }
     const nextProjects = projects.filter((p) => p.id !== id);
     const nextTasks = tasks.map((t) => ({ ...t, projectIds: (t.projectIds || []).filter((pid) => pid !== id) }));
     const nextEntries = entries.filter((e) => e.projectId !== id);
-    const nextTimesheetRows = timesheetRows.filter((r) => r.projectId !== id);
-    const nextHiddenRows = hiddenRows.filter((h) => h.projectId !== id);
+    const nextShownRows = shownRows.filter((r) => r.projectId !== id);
     setProjects(nextProjects);
     setTasks(nextTasks);
     setEntries(nextEntries);
-    setTimesheetRows(nextTimesheetRows);
-    setHiddenRows(nextHiddenRows);
+    setShownRows(nextShownRows);
     persist(TABLES.projects, nextProjects);
     persist(TABLES.tasks, nextTasks);
     persist(TABLES.entries, nextEntries);
-    persist(TABLES.timesheetRows, nextTimesheetRows);
-    persist(TABLES.hiddenRows, nextHiddenRows);
+    persist(TABLES.shownRows, nextShownRows);
   };
 
   const addTask = (name, projectIds) => {
@@ -498,22 +480,24 @@ export default function TallyApp() {
   };
 
   const deleteTask = (id) => {
+    if (entries.some((e) => e.taskId === id && e.invoiced)) {
+      setError("Can't delete this task — it has invoiced time entries. Unmark them as invoiced first if you need to remove it.");
+      return;
+    }
     const nextTasks = tasks.filter((t) => t.id !== id);
     const nextEntries = entries.filter((e) => e.taskId !== id);
-    const nextTimesheetRows = timesheetRows.filter((r) => r.taskId !== id);
-    const nextHiddenRows = hiddenRows.filter((h) => h.taskId !== id);
+    const nextShownRows = shownRows.filter((r) => r.taskId !== id);
     setTasks(nextTasks);
     setEntries(nextEntries);
-    setTimesheetRows(nextTimesheetRows);
-    setHiddenRows(nextHiddenRows);
+    setShownRows(nextShownRows);
     persist(TABLES.tasks, nextTasks);
     persist(TABLES.entries, nextEntries);
-    persist(TABLES.timesheetRows, nextTimesheetRows);
-    persist(TABLES.hiddenRows, nextHiddenRows);
+    persist(TABLES.shownRows, nextShownRows);
   };
 
   const setHours = (taskId, projectId, date, rawValue) => {
     const idx = entries.findIndex((e) => e.taskId === taskId && e.projectId === projectId && e.date === date);
+    if (idx >= 0 && entries[idx].invoiced) return; // locked, edit via the timesheet is blocked
     let next = [...entries];
     if (rawValue === "") {
       if (idx >= 0) next.splice(idx, 1);
@@ -525,6 +509,14 @@ export default function TallyApp() {
     setEntries(next);
     persist(TABLES.entries, next);
   };
+
+  const setEntriesInvoiced = (entryIds, invoiced) => {
+    const idSet = new Set(entryIds);
+    const next = entries.map((e) => (idSet.has(e.id) ? { ...e, invoiced } : e));
+    setEntries(next);
+    persist(TABLES.entries, next);
+  };
+
 
   const clientById = useMemo(() => Object.fromEntries(clients.map((c) => [c.id, c])), [clients]);
   const projectsByClient = useMemo(() => {
@@ -549,6 +541,11 @@ export default function TallyApp() {
     for (const e of entries) m[`${e.taskId}|${e.projectId}|${e.date}`] = e.hours;
     return m;
   }, [entries]);
+  const invoicedLookup = useMemo(() => {
+    const m = {};
+    for (const e of entries) if (e.invoiced) m[`${e.taskId}|${e.projectId}|${e.date}`] = true;
+    return m;
+  }, [entries]);
 
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const weekKey = fmtISO(weekDates[0]);
@@ -557,9 +554,29 @@ export default function TallyApp() {
     { month: "short", day: "numeric", year: "numeric" }
   )}`;
 
-  const hiddenThisWeek = useMemo(
-    () => new Set(hiddenRows.filter((h) => h.weekKey === weekKey).map((h) => `${h.taskId}|${h.projectId}`)),
-    [hiddenRows, weekKey]
+  const copyPreviousWeekTasks = () => {
+    const prevWeekStart = addDays(weekStart, -7);
+    const prevDates = new Set(Array.from({ length: 7 }, (_, i) => fmtISO(addDays(prevWeekStart, i))));
+    const taskByIdMap = Object.fromEntries(tasks.map((t) => [t.id, t]));
+    const projectByIdMap = Object.fromEntries(projects.map((p) => [p.id, p]));
+    const seen = new Set();
+    const pairs = [];
+    for (const e of entries) {
+      if (!prevDates.has(e.date) || !(Number(e.hours) > 0)) continue;
+      const key = `${e.taskId}|${e.projectId}`;
+      if (seen.has(key)) continue;
+      const task = taskByIdMap[e.taskId];
+      const project = projectByIdMap[e.projectId];
+      if (!task || task.archived || !project || project.archived) continue;
+      seen.add(key);
+      pairs.push({ taskId: e.taskId, projectId: e.projectId });
+    }
+    addMultipleToTimesheet(pairs, weekKey);
+  };
+
+  const shownThisWeek = useMemo(
+    () => new Set(shownRows.filter((r) => r.weekKey === weekKey).map((r) => `${r.taskId}|${r.projectId}`)),
+    [shownRows, weekKey]
   );
 
   const dayTotal = (date) =>
@@ -608,13 +625,14 @@ export default function TallyApp() {
           projects={projects}
           clients={clientById}
           tasksByProject={tasksByProject}
-          timesheetRows={timesheetRows}
-          hiddenThisWeek={hiddenThisWeek}
+          shownThisWeek={shownThisWeek}
           onAddToTimesheet={(taskId, projectId) => addToTimesheet(taskId, projectId, weekKey)}
           onHideForWeek={(taskId, projectId) => hideForWeek(taskId, projectId, weekKey)}
+          onCopyPreviousWeek={copyPreviousWeekTasks}
           weekDates={weekDates}
           weekLabel={weekLabel}
           entryLookup={entryLookup}
+          invoicedLookup={invoicedLookup}
           setHours={setHours}
           dayTotal={dayTotal}
           taskProjectWeekTotal={taskProjectWeekTotal}
@@ -626,7 +644,14 @@ export default function TallyApp() {
       )}
 
       {tab === "reports" && (
-        <ReportsTab entries={entries} tasks={tasks} projects={projects} clients={clients} clientById={clientById} />
+        <ReportsTab
+          entries={entries}
+          tasks={tasks}
+          projects={projects}
+          clients={clients}
+          clientById={clientById}
+          onSetInvoiced={setEntriesInvoiced}
+        />
       )}
 
       {tab === "clients" && (
@@ -672,13 +697,14 @@ function TimesheetTab({
   projects,
   clients,
   tasksByProject,
-  timesheetRows,
-  hiddenThisWeek,
+  shownThisWeek,
   onAddToTimesheet,
   onHideForWeek,
+  onCopyPreviousWeek,
   weekDates,
   weekLabel,
   entryLookup,
+  invoicedLookup,
   setHours,
   dayTotal,
   taskProjectWeekTotal,
@@ -689,15 +715,11 @@ function TimesheetTab({
 }) {
   const [showAddPanel, setShowAddPanel] = useState(false);
 
-  const selectedSet = useMemo(
-    () => new Set(timesheetRows.map((r) => `${r.taskId}|${r.projectId}`)),
-    [timesheetRows]
-  );
+  const hasEntryThisWeek = (taskId, projectId) =>
+    weekDates.some((d) => entryLookup[`${taskId}|${projectId}|${fmtISO(d)}`] !== undefined);
 
-  const isVisibleThisWeek = (taskId, projectId) => {
-    const key = `${taskId}|${projectId}`;
-    return selectedSet.has(key) && !hiddenThisWeek.has(key);
-  };
+  const isVisibleThisWeek = (taskId, projectId) =>
+    shownThisWeek.has(`${taskId}|${projectId}`) || hasEntryThisWeek(taskId, projectId);
 
   const allActivePairs = useMemo(() => {
     const pairs = [];
@@ -787,6 +809,7 @@ function TimesheetTab({
                       {weekDates.map((d) => {
                         const iso = fmtISO(d);
                         const val = entryLookup[`${t.id}|${p.id}|${iso}`];
+                        const locked = !!invoicedLookup[`${t.id}|${p.id}|${iso}`];
                         return (
                           <td key={iso} style={{ padding: 4, textAlign: "center" }}>
                             <input
@@ -795,6 +818,8 @@ function TimesheetTab({
                               step="0.5"
                               value={val === undefined ? "" : val}
                               onChange={(ev) => setHours(t.id, p.id, iso, ev.target.value)}
+                              disabled={locked}
+                              title={locked ? "Invoiced — locked" : undefined}
                               style={{
                                 width: 52,
                                 textAlign: "center",
@@ -803,7 +828,9 @@ function TimesheetTab({
                                 border: `1px solid ${COLORS.line}`,
                                 borderRadius: 4,
                                 padding: "6px 2px",
-                                color: COLORS.ink,
+                                color: locked ? COLORS.inkFaint : COLORS.ink,
+                                background: locked ? COLORS.bg : COLORS.paper,
+                                cursor: locked ? "not-allowed" : "text",
                               }}
                             />
                           </td>
@@ -814,13 +841,15 @@ function TimesheetTab({
                           <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: COLORS.inkSoft }}>
                             {taskProjectWeekTotal(t.id, p.id)}
                           </span>
-                          <button
-                            onClick={() => onHideForWeek(t.id, p.id)}
-                            title="Remove from timesheet"
-                            style={{ ...dangerLinkButtonStyle, fontSize: 14, lineHeight: 1 }}
-                          >
-                            ×
-                          </button>
+                          {taskProjectWeekTotal(t.id, p.id) === 0 && (
+                            <button
+                              onClick={() => onHideForWeek(t.id, p.id)}
+                              title="Remove from timesheet"
+                              style={{ ...dangerLinkButtonStyle, fontSize: 14, lineHeight: 1 }}
+                            >
+                              ×
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -845,11 +874,19 @@ function TimesheetTab({
         </div>
       )}
 
-      <div style={{ marginTop: 16 }}>
+      <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center" }}>
         <button onClick={() => setShowAddPanel((s) => !s)} style={buttonStyle}>
           {showAddPanel ? "Close" : "+ Add task"}
         </button>
+        <button
+          onClick={onCopyPreviousWeek}
+          style={{ ...buttonStyle, background: COLORS.paper, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+        >
+          Copy from last week
+        </button>
+      </div>
 
+      <div style={{ marginTop: 16 }}>
         {showAddPanel && (
           <div
             style={{
@@ -873,20 +910,20 @@ function TimesheetTab({
                 {availablePairs.map(({ task, project }) => (
                   <div
                     key={`${task.id}-${project.id}`}
+                    onClick={() => onAddToTimesheet(task.id, project.id)}
                     style={{
                       display: "flex",
                       justifyContent: "space-between",
                       alignItems: "center",
                       padding: "6px 4px",
                       borderBottom: `1px solid ${COLORS.line}`,
+                      cursor: "pointer",
                     }}
                   >
                     <span style={{ fontSize: 13, fontFamily: FONT_UI, color: COLORS.ink }}>
                       {task.name} <span style={{ color: COLORS.inkFaint }}>· {project.name}</span>
                     </span>
-                    <button onClick={() => onAddToTimesheet(task.id, project.id)} style={linkButtonStyle}>
-                      Add
-                    </button>
+                    <span style={{ ...linkButtonStyle, pointerEvents: "none" }}>Add</span>
                   </div>
                 ))}
               </div>
@@ -907,10 +944,11 @@ const thStyle = {
   textAlign: "center",
 };
 
-function ReportsTab({ entries, tasks, projects, clients, clientById }) {
-  const [range, setRange] = useState(() => getCurrentMonthRange());
+function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoiced }) {
+  const [range, setRange] = useState(() => getPreviousMonthRange());
   const [filterClientId, setFilterClientId] = useState("");
   const [filterProjectId, setFilterProjectId] = useState("");
+  const [filterTaskId, setFilterTaskId] = useState("");
 
   const projectById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
   const taskById = useMemo(() => Object.fromEntries(tasks.map((t) => [t.id, t])), [tasks]);
@@ -919,6 +957,12 @@ function ReportsTab({ entries, tasks, projects, clients, clientById }) {
     ? projects.filter((p) => p.clientId === filterClientId)
     : projects;
 
+  const taskFilterOptions = tasks.filter((t) => {
+    if (filterProjectId) return (t.projectIds || []).includes(filterProjectId);
+    if (filterClientId) return (t.projectIds || []).some((pid) => projectById[pid]?.clientId === filterClientId);
+    return true;
+  });
+
   const handleClientFilterChange = (value) => {
     setFilterClientId(value);
     // Drop the project filter if it no longer belongs to the newly selected client.
@@ -926,11 +970,27 @@ function ReportsTab({ entries, tasks, projects, clients, clientById }) {
       const project = projectById[filterProjectId];
       if (!project || project.clientId !== value) setFilterProjectId("");
     }
+    // Drop the task filter if it no longer belongs to the newly selected client.
+    if (value && filterTaskId) {
+      const task = taskById[filterTaskId];
+      const stillValid = task && (task.projectIds || []).some((pid) => projectById[pid]?.clientId === value);
+      if (!stillValid) setFilterTaskId("");
+    }
+  };
+
+  const handleProjectFilterChange = (value) => {
+    setFilterProjectId(value);
+    // Drop the task filter if it no longer belongs to the newly selected project.
+    if (value && filterTaskId) {
+      const task = taskById[filterTaskId];
+      if (!task || !(task.projectIds || []).includes(value)) setFilterTaskId("");
+    }
   };
 
   const entriesInRange = useMemo(() => {
     return entries.filter((e) => {
       if (e.date < range.from || e.date > range.to) return false;
+      if (filterTaskId && e.taskId !== filterTaskId) return false;
       if (filterProjectId && e.projectId !== filterProjectId) return false;
       if (filterClientId) {
         const project = projectById[e.projectId];
@@ -938,34 +998,48 @@ function ReportsTab({ entries, tasks, projects, clients, clientById }) {
       }
       return true;
     });
-  }, [entries, range, filterClientId, filterProjectId, projectById]);
+  }, [entries, range, filterClientId, filterProjectId, filterTaskId, projectById]);
 
-  const hoursByTaskProject = useMemo(() => {
+  const byTaskProject = useMemo(() => {
     const m = {};
     for (const e of entriesInRange) {
       const key = `${e.taskId}|${e.projectId}`;
-      m[key] = (m[key] || 0) + Number(e.hours || 0);
+      if (!m[key]) m[key] = { hours: 0, invoicedHours: 0, entryIds: [] };
+      m[key].hours += Number(e.hours || 0);
+      if (e.invoiced) m[key].invoicedHours += Number(e.hours || 0);
+      m[key].entryIds.push(e.id);
     }
     return m;
   }, [entriesInRange]);
 
-  const rows = Object.entries(hoursByTaskProject)
-    .map(([key, hours]) => {
+  const rows = Object.entries(byTaskProject)
+    .map(([key, data]) => {
       const [taskId, projectId] = key.split("|");
       const task = taskById[taskId];
       const project = projectById[projectId];
       const client = project ? clientById[project.clientId] : null;
+      const roundedHours = round2(data.hours);
+      const invoiceStatus =
+        data.invoicedHours <= 0 ? "none" : data.invoicedHours >= data.hours ? "full" : "partial";
       return {
         key,
+        entryIds: data.entryIds,
         clientName: client?.name || "No client",
         projectName: project?.name || "Unknown project",
         taskName: task?.name || "Unknown task",
-        hours: round2(hours),
+        hours: roundedHours,
+        amount: round2(roundedHours * (project?.hourlyRate || 0)),
+        invoiceStatus,
       };
     })
     .sort((a, b) => b.hours - a.hours);
 
   const total = round2(rows.reduce((sum, r) => sum + r.hours, 0));
+  const totalAmount = round2(rows.reduce((sum, r) => sum + r.amount, 0));
+
+  const allEntryIds = entriesInRange.map((e) => e.id);
+  const anyUninvoiced = entriesInRange.some((e) => !e.invoiced);
+  const anyInvoiced = entriesInRange.some((e) => e.invoiced);
 
   return (
     <div>
@@ -986,12 +1060,6 @@ function ReportsTab({ entries, tasks, projects, clients, clientById }) {
             onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))}
           />
         </Field>
-        <button
-          onClick={() => setRange(getCurrentMonthRange())}
-          style={{ ...buttonStyle, background: COLORS.paper, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
-        >
-          Current month
-        </button>
         <Field label="Client">
           <select style={inputStyle} value={filterClientId} onChange={(e) => handleClientFilterChange(e.target.value)}>
             <option value="">All clients</option>
@@ -1001,18 +1069,27 @@ function ReportsTab({ entries, tasks, projects, clients, clientById }) {
           </select>
         </Field>
         <Field label="Project">
-          <select style={inputStyle} value={filterProjectId} onChange={(e) => setFilterProjectId(e.target.value)}>
+          <select style={inputStyle} value={filterProjectId} onChange={(e) => handleProjectFilterChange(e.target.value)}>
             <option value="">All projects</option>
             {projectFilterOptions.map((p) => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
         </Field>
-        {(filterClientId || filterProjectId) && (
+        <Field label="Task">
+          <select style={inputStyle} value={filterTaskId} onChange={(e) => setFilterTaskId(e.target.value)}>
+            <option value="">All tasks</option>
+            {taskFilterOptions.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        </Field>
+        {(filterClientId || filterProjectId || filterTaskId) && (
           <button
             onClick={() => {
               setFilterClientId("");
               setFilterProjectId("");
+              setFilterTaskId("");
             }}
             style={linkButtonStyle}
           >
@@ -1031,26 +1108,64 @@ function ReportsTab({ entries, tasks, projects, clients, clientById }) {
           alignItems: "center",
           justifyContent: "space-between",
           gap: 10,
+          flexWrap: "wrap",
         }}
       >
         <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <span style={{ fontFamily: FONT_DISPLAY, fontSize: 32, fontWeight: 700, color: COLORS.accent }}>{total}h</span>
+          <span style={{ fontFamily: FONT_DISPLAY, fontSize: 32, fontWeight: 700, color: COLORS.accent }}>
+            {total}h/{fmtUSD(totalAmount)}
+          </span>
           <span style={{ fontFamily: FONT_UI, fontSize: 13, color: COLORS.inkSoft }}>
             tracked from {range.from} to {range.to}
           </span>
         </div>
-        <button
-          onClick={() =>
-            downloadCSV(
-              `tally-report-${range.from}-to-${range.to}.csv`,
-              ["client", "project", "task", "hours"],
-              rows.map((r) => [r.clientName, r.projectName, r.taskName, r.hours])
-            )
-          }
-          style={{ ...buttonStyle, background: COLORS.paper, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
-        >
-          Export CSV
-        </button>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <button
+              onClick={() =>
+                downloadCSV(
+                  `tally-report-${range.from}-to-${range.to}.csv`,
+                  ["folder", "task", "date", "duration_decimal", "hourly_rate"],
+                  entriesInRange.map((e) => {
+                    const task = taskById[e.taskId];
+                    const project = projectById[e.projectId];
+                    const client = project ? clientById[project.clientId] : null;
+                    return [
+                      client?.name || "No client",
+                      task?.name || "Unknown task",
+                      e.date,
+                      round2(e.hours),
+                      project?.hourlyRate || "",
+                    ];
+                  })
+                )
+              }
+              title="Exports the time entries matching the filters above"
+              style={{ ...buttonStyle, background: COLORS.paper, color: COLORS.ink, border: `1px solid ${COLORS.line}` }}
+            >
+              Export CSV
+            </button>
+            {anyUninvoiced && (
+              <ConfirmButton
+                label="Mark as Invoiced"
+                title="Marks the time entries matching the filters above"
+                onConfirm={() => onSetInvoiced(allEntryIds, true)}
+                style={buttonStyle}
+              />
+            )}
+            {anyInvoiced && (
+              <ConfirmButton
+                label="Unmark as Invoiced"
+                title="Unmarks the time entries matching the filters above"
+                onConfirm={() => onSetInvoiced(allEntryIds, false)}
+                style={{ ...buttonStyle, background: COLORS.paper, color: COLORS.red, border: `1px solid ${COLORS.line}` }}
+              />
+            )}
+          </div>
+          <span style={{ fontFamily: FONT_UI, fontSize: 11, color: COLORS.inkFaint }}>
+            Applies to the {entriesInRange.length} entries matching the filters above
+          </span>
+        </div>
       </div>
 
       {rows.length === 0 ? (
@@ -1064,6 +1179,8 @@ function ReportsTab({ entries, tasks, projects, clients, clientById }) {
                 <th style={{ ...thStyle, textAlign: "left" }}>Project</th>
                 <th style={{ ...thStyle, textAlign: "left" }}>Task</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Hours</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>Invoiced</th>
               </tr>
             </thead>
             <tbody>
@@ -1074,6 +1191,14 @@ function ReportsTab({ entries, tasks, projects, clients, clientById }) {
                   <td style={{ padding: "8px 16px", fontSize: 14, color: COLORS.ink }}>{r.taskName}</td>
                   <td style={{ padding: "8px 16px", textAlign: "right", fontFamily: FONT_MONO, fontSize: 13, color: COLORS.ink }}>
                     {r.hours}
+                  </td>
+                  <td style={{ padding: "8px 16px", textAlign: "right", fontFamily: FONT_MONO, fontSize: 13, color: COLORS.inkSoft }}>
+                    {fmtUSD(r.amount)}
+                  </td>
+                  <td style={{ padding: "8px 16px", textAlign: "center", fontSize: 12, fontFamily: FONT_UI }}>
+                    {r.invoiceStatus === "full" && <span style={{ color: COLORS.accent, fontWeight: 600 }}>✓ Invoiced</span>}
+                    {r.invoiceStatus === "partial" && <span style={{ color: COLORS.amber, fontWeight: 600 }}>Partial</span>}
+                    {r.invoiceStatus === "none" && <span style={{ color: COLORS.inkFaint }}>—</span>}
                   </td>
                 </tr>
               ))}
@@ -1097,7 +1222,7 @@ const linkButtonStyle = {
 
 const dangerLinkButtonStyle = { ...linkButtonStyle, color: COLORS.red };
 
-function ConfirmButton({ label, onConfirm, style }) {
+function ConfirmButton({ label, onConfirm, style, title }) {
   const [confirming, setConfirming] = useState(false);
   if (confirming) {
     return (
@@ -1119,7 +1244,7 @@ function ConfirmButton({ label, onConfirm, style }) {
     );
   }
   return (
-    <button onClick={() => setConfirming(true)} style={style || dangerLinkButtonStyle}>
+    <button onClick={() => setConfirming(true)} style={style || dangerLinkButtonStyle} title={title}>
       {label}
     </button>
   );

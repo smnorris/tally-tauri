@@ -4,8 +4,6 @@ A native-feeling macOS app built with Tauri: a Rust shell wrapping a small React
 frontend, using the system webview (not a bundled Chromium), so the built app is
 small. Single user, no network sync — data is plain JSON files on disk.
 
-100% vibes.
-
 ## Requirements
 
 - Node.js 18+ and npm
@@ -14,6 +12,8 @@ small. Single user, no network sync — data is plain JSON files on disk.
 - Tauri's macOS prerequisites are covered by the above — see
   https://v2.tauri.app/start/prerequisites/ if `npm run tauri dev` complains about
   missing tools.
+
+110% vibes.
 
 ## Setup
 

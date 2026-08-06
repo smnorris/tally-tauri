@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../storage.js", async () => import("./mockStorage.js"));
@@ -36,19 +36,32 @@ async function createClientProjectTask(
 }
 
 // From the Timesheet tab, opens the add panel and adds the given task/project
-// pairing (assumes it's the only available pairing).
+// pairing (assumes it's the only available pairing). The whole row is
+// clickable (task name, project name, or the "Add" label all work) - the
+// "Add" text is a plain span, not a button, so we click it by text.
 async function addPairToTimesheet(user) {
   await user.click(screen.getByRole("button", { name: "Timesheet" }));
   await user.click(await screen.findByRole("button", { name: "+ Add task" }));
-  await user.click(await screen.findByRole("button", { name: "Add" }));
+  const addLabel = await screen.findByText("Add");
+  await user.click(addLabel.closest("div"));
+  await user.click(screen.getByRole("button", { name: "Close" }));
+}
+
+// Switches to the Report tab and widens its date range to cover everything,
+// since it defaults to the previous calendar month and our tests log time
+// "today" (i.e. the current month).
+async function goToReportWidened(user) {
+  await user.click(screen.getByRole("button", { name: "Report" }));
+  const fromInput = await screen.findByLabelText("From");
+  const toInput = screen.getByLabelText("To");
+  fireEvent.change(fromInput, { target: { value: "2000-01-01" } });
+  fireEvent.change(toInput, { target: { value: "2100-12-31" } });
 }
 
 describe("Tally app", () => {
   it("shows an empty timesheet on first load", async () => {
     render(<App />);
-    expect(
-      await screen.findByText(/Your timesheet is empty/i)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Your timesheet is empty/i)).toBeInTheDocument();
   });
 
   it("creates a client, project, and task, adds it to the timesheet, and totals logged hours", async () => {
@@ -116,31 +129,68 @@ describe("Tally app", () => {
     ).toBeInTheDocument();
   });
 
-  it("hides a task from only the week it was removed from, not other weeks", async () => {
+  it("each week starts with all tasks hidden by default", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await createClientProjectTask(user);
+    await addPairToTimesheet(user);
+    expect(screen.getByText("Homepage layout")).toBeInTheDocument();
+
+    // Next week: nothing was explicitly added there, and no hours logged there.
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    expect(screen.queryByText("Homepage layout")).not.toBeInTheDocument();
+
+    // Back to the original week: still shown, since it was explicitly added there.
+    await user.click(screen.getByRole("button", { name: "This week" }));
+    expect(screen.getByText("Homepage layout")).toBeInTheDocument();
+  });
+
+  it("only shows the remove button when a row has no logged hours this week", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await createClientProjectTask(user);
     await addPairToTimesheet(user);
 
-    // Log hours this week, then hide the row for this week only.
+    // Freshly added, no hours yet: remove button is present.
+    expect(screen.getByTitle("Remove from timesheet")).toBeInTheDocument();
+
     const hourInputs = screen.getAllByRole("spinbutton");
     await user.type(hourInputs[0], "2");
     await screen.findByText("2h this week");
 
-    await user.click(screen.getByTitle("Remove from timesheet"));
-    expect(screen.queryByText("Homepage layout")).not.toBeInTheDocument();
+    // Once hours are logged, the remove button disappears - the row can't be
+    // hidden while it has data, since logged hours force it visible anyway.
+    expect(screen.queryByTitle("Remove from timesheet")).not.toBeInTheDocument();
 
-    // Next week: the task should still be there (never removed globally).
-    await user.click(screen.getByRole("button", { name: "Next →" }));
-    expect(await screen.findByText("Homepage layout")).toBeInTheDocument();
-
-    // Back to the original week: still hidden there.
-    await user.click(screen.getByRole("button", { name: "This week" }));
+    // Clear the hours back to zero: remove button reappears, and works.
+    await user.clear(hourInputs[0]);
+    await user.click(await screen.findByTitle("Remove from timesheet"));
     expect(screen.queryByText("Homepage layout")).not.toBeInTheDocument();
   });
 
-  it("exports a CSV from the Reports tab without throwing", async () => {
+  it("Copy from last week pulls forward tasks with logged hours from the previous week", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await createClientProjectTask(user);
+    await addPairToTimesheet(user);
+    const hourInputs = screen.getAllByRole("spinbutton");
+    await user.type(hourInputs[0], "3");
+    await screen.findByText("3h this week");
+
+    // Move to next week: task isn't there by default.
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    expect(screen.queryByText("Homepage layout")).not.toBeInTheDocument();
+
+    // Copy from last week brings it back, with no hours logged yet this week.
+    await user.click(screen.getByRole("button", { name: "Copy from last week" }));
+    expect(await screen.findByText("Homepage layout")).toBeInTheDocument();
+    expect(screen.getByText("0h this week")).toBeInTheDocument();
+  });
+
+  it("exports a CSV matching Timemator's column format", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -150,16 +200,35 @@ describe("Tally app", () => {
     await user.type(hourInputs[0], "4");
     await screen.findByText("4h this week");
 
-    await user.click(screen.getByRole("button", { name: "Reports" }));
-    expect(await screen.findByText("4h")).toBeInTheDocument();
+    await goToReportWidened(user);
+    expect(await screen.findByText("4h/$0")).toBeInTheDocument();
 
+    let capturedText = "";
+    const OriginalBlob = globalThis.Blob;
+    class SpyBlob extends OriginalBlob {
+      constructor(parts, opts) {
+        super(parts, opts);
+        capturedText = parts.join("");
+      }
+    }
+    globalThis.Blob = SpyBlob;
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
     await user.click(screen.getByRole("button", { name: "Export CSV" }));
     expect(clickSpy).toHaveBeenCalledTimes(1);
+
+    // One row per time entry, Timemator's expected columns.
+    const lines = capturedText.split("\r\n");
+    expect(lines[0]).toBe("folder,task,date,duration_decimal,hourly_rate");
+    expect(lines[1]).toContain("Acme Corp");
+    expect(lines[1]).toContain("Homepage layout");
+    expect(lines[1]).toContain("4");
+
     clickSpy.mockRestore();
+    globalThis.Blob = OriginalBlob;
   });
 
-  it("filters the report by client and project", async () => {
+  it("filters the report by client, project, and task", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -173,26 +242,87 @@ describe("Tally app", () => {
     await user.type(hourInputs[0], "2");
     await screen.findByText("2h this week");
 
-    await user.click(screen.getByRole("button", { name: "Reports" }));
-    expect(await screen.findByText("2h")).toBeInTheDocument();
-    expect(screen.getByText("Homepage layout")).toBeInTheDocument();
+    await goToReportWidened(user);
+    expect(await screen.findByText("2h/$0")).toBeInTheDocument();
+    expect(within(screen.getByRole("table")).getByText("Homepage layout")).toBeInTheDocument();
 
     // Filtering to the entry's own client should keep it visible.
     const clientFilter = screen.getByLabelText("Client");
     await user.selectOptions(clientFilter, "Acme Corp");
-    expect(await screen.findByText("2h")).toBeInTheDocument();
+    expect(await screen.findByText("2h/$0")).toBeInTheDocument();
 
     // The project dropdown should be scoped to the selected client's projects.
     const projectFilter = screen.getByLabelText("Project");
     expect(within(projectFilter).getByText("Website redesign")).toBeInTheDocument();
-
     await user.selectOptions(projectFilter, "Website redesign");
-    expect(await screen.findByText("2h")).toBeInTheDocument();
-    expect(screen.getByText("Homepage layout")).toBeInTheDocument();
+    expect(await screen.findByText("2h/$0")).toBeInTheDocument();
 
-    // Clear filters resets both dropdowns back to "All".
+    // The task dropdown should be scoped to the selected project's tasks.
+    const taskFilter = screen.getByLabelText("Task");
+    expect(within(taskFilter).getByText("Homepage layout")).toBeInTheDocument();
+    await user.selectOptions(taskFilter, "Homepage layout");
+    expect(await screen.findByText("2h/$0")).toBeInTheDocument();
+
+    // Clear filters resets all three dropdowns back to "All".
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(clientFilter.value).toBe("");
     expect(projectFilter.value).toBe("");
+    expect(taskFilter.value).toBe("");
+  });
+
+  it("marks filtered entries as invoiced, locking them in the timesheet, and can be unmarked", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await createClientProjectTask(user);
+    await addPairToTimesheet(user);
+    const hourInputs = screen.getAllByRole("spinbutton");
+    await user.type(hourInputs[0], "5");
+    await screen.findByText("5h this week");
+
+    await goToReportWidened(user);
+    await screen.findByText("5h/$0");
+
+    await user.click(screen.getByRole("button", { name: "Mark as Invoiced" }));
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(await screen.findByText("✓ Invoiced")).toBeInTheDocument();
+
+    // Back on the timesheet, the day cell should now be disabled.
+    await user.click(screen.getByRole("button", { name: "Timesheet" }));
+    expect(screen.getAllByRole("spinbutton")[0]).toBeDisabled();
+
+    // Unmark restores editability.
+    await goToReportWidened(user);
+    await user.click(screen.getByRole("button", { name: "Unmark as Invoiced" }));
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(screen.queryByText("✓ Invoiced")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Timesheet" }));
+    expect(screen.getAllByRole("spinbutton")[0]).not.toBeDisabled();
+  });
+
+  it("blocks deleting a task that has invoiced time entries", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await createClientProjectTask(user);
+    await addPairToTimesheet(user);
+    const hourInputs = screen.getAllByRole("spinbutton");
+    await user.type(hourInputs[0], "1");
+    await screen.findByText("1h this week");
+
+    await goToReportWidened(user);
+    await screen.findByText("1h/$0");
+    await user.click(screen.getByRole("button", { name: "Mark as Invoiced" }));
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    await screen.findByText("✓ Invoiced");
+
+    await user.click(screen.getByRole("button", { name: "Tasks" }));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+
+    expect(await screen.findByText(/has invoiced time entries/i)).toBeInTheDocument();
+    // The task should still be there since deletion was blocked.
+    expect(screen.getByText("Homepage layout")).toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtISO, getMonday, addDays, getCurrentMonthRange } from "../App.jsx";
+import { fmtISO, getMonday, addDays, getCurrentMonthRange, getPreviousMonthRange } from "../App.jsx";
 
 describe("fmtISO", () => {
   it("formats a date as YYYY-MM-DD", () => {
@@ -68,5 +68,26 @@ describe("getCurrentMonthRange", () => {
     const range = getCurrentMonthRange(new Date(2026, 11, 10));
     expect(range.from).toBe("2026-12-01");
     expect(range.to).toBe("2026-12-31");
+  });
+});
+
+describe("getPreviousMonthRange", () => {
+  it("returns the month before the given date", () => {
+    const range = getPreviousMonthRange(new Date(2026, 7, 12)); // August -> July
+    expect(range.from).toBe("2026-07-01");
+    expect(range.to).toBe("2026-07-31");
+  });
+
+  it("rolls back across a year boundary from January", () => {
+    const range = getPreviousMonthRange(new Date(2026, 0, 15)); // Jan -> Dec 2025
+    expect(range.from).toBe("2025-12-01");
+    expect(range.to).toBe("2025-12-31");
+  });
+
+  it("handles the previous month having fewer days than the current one", () => {
+    // March 2026 -> February 2026 (28 days, non-leap year)
+    const range = getPreviousMonthRange(new Date(2026, 2, 15));
+    expect(range.from).toBe("2026-02-01");
+    expect(range.to).toBe("2026-02-28");
   });
 });
