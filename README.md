@@ -4,6 +4,8 @@ A native-feeling macOS app built with Tauri: a Rust shell wrapping a small React
 frontend, using the system webview (not a bundled Chromium), so the built app is
 small. Single user, no network sync — data is plain JSON files on disk.
 
+110% vibes.
+
 ## Requirements
 
 - Node.js 18+ and npm
@@ -12,8 +14,6 @@ small. Single user, no network sync — data is plain JSON files on disk.
 - Tauri's macOS prerequisites are covered by the above — see
   https://v2.tauri.app/start/prerequisites/ if `npm run tauri dev` complains about
   missing tools.
-
-110% vibes.
 
 ## Setup
 
@@ -66,12 +66,15 @@ write plain JSON files in the app's data directory:
   clients.json
   projects.json
   tasks.json
-  entries.json
+  time-entries.json
+  timesheet-shown-rows.json
 ```
 
 (The folder name follows whatever `identifier` you set in `tauri.conf.json`.)
 
-Back up your data by copying that folder.
+Back up your data by copying that folder. For the full shape of each file —
+field-by-field, including migration history — see
+[`DATA_SCHEMA.md`](./DATA_SCHEMA.md).
 
 ## Project layout
 
