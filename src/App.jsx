@@ -1069,7 +1069,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 16, marginBottom: 28, flexWrap: "wrap" }}>
         <div style={{ position: "relative" }}>
           <Field label="From">
             <input
@@ -1118,6 +1118,9 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
             onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))}
           />
         </Field>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
         <Field label="Client">
           <select style={inputStyle} value={filterClientId} onChange={(e) => handleClientFilterChange(e.target.value)}>
             <option value="">All clients</option>
