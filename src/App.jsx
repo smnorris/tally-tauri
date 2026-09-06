@@ -1070,7 +1070,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
   return (
     <div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ position: "relative" }}>
           <Field label="From">
             <input
               type="date"
@@ -1087,6 +1087,10 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
           </Field>
           <label
             style={{
+              position: "absolute",
+              top: "100%",
+              left: 0,
+              marginTop: 4,
               display: "flex",
               alignItems: "center",
               gap: 6,
@@ -1094,6 +1098,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
               fontSize: 12,
               color: COLORS.inkFaint,
               cursor: "pointer",
+              whiteSpace: "nowrap",
             }}
             title="Set the From date to the oldest uninvoiced entry matching the filters below"
           >
