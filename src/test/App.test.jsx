@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../storage.js", async () => import("./mockStorage.js"));
 
 import { resetMockStorage } from "./mockStorage.js";
-import App from "../App.jsx";
+import App, { fmtISO, getMonday } from "../App.jsx";
 
 beforeEach(() => {
   resetMockStorage();
@@ -270,7 +270,7 @@ describe("Tally app", () => {
     expect(taskFilter.value).toBe("");
   });
 
-  it("shows all uninvoiced hours regardless of date via the uninvoiced-only toggle", async () => {
+  it("sets the From date to the oldest uninvoiced entry via the Earliest date toggle", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -280,33 +280,41 @@ describe("Tally app", () => {
     await user.type(hourInputs[0], "3");
     await screen.findByText("3h this week");
 
-    // Narrow the date range so today's entry is excluded.
+    const entryDate = fmtISO(getMonday(new Date()));
+
+    // Manually set a From date after the entry, and a wide To, so only the
+    // From boundary is under test.
     await user.click(screen.getByRole("button", { name: "Report" }));
     const fromInput = await screen.findByLabelText("From");
     const toInput = screen.getByLabelText("To");
-    fireEvent.change(fromInput, { target: { value: "2000-01-01" } });
-    fireEvent.change(toInput, { target: { value: "2000-01-02" } });
+    fireEvent.change(fromInput, { target: { value: "2100-01-01" } });
+    fireEvent.change(toInput, { target: { value: "2100-12-31" } });
     expect(await screen.findByText(/No time entries match this filter/i)).toBeInTheDocument();
 
-    // Checking "All uninvoiced hours" ignores the date range entirely and disables it.
-    await user.click(screen.getByLabelText("All uninvoiced hours"));
+    // Checking "Earliest date" overrides the manual From with the oldest
+    // uninvoiced entry's date matching the filters below, and disables From
+    // (but not To) for manual editing.
+    await user.click(screen.getByLabelText("Earliest date"));
     expect(await screen.findByText("3h/$0")).toBeInTheDocument();
     expect(screen.getByLabelText("From")).toBeDisabled();
-    expect(screen.getByLabelText("To")).toBeDisabled();
+    expect(screen.getByLabelText("From").value).toBe(entryDate);
+    expect(screen.getByLabelText("To")).not.toBeDisabled();
 
     // It still composes with the client/project/task filters.
     await user.selectOptions(screen.getByLabelText("Client"), "Acme Corp");
     expect(await screen.findByText("3h/$0")).toBeInTheDocument();
 
-    // Once the entry is marked invoiced, it drops out of the uninvoiced-only view.
+    // Once the only uninvoiced entry is marked invoiced, there's no oldest
+    // uninvoiced date left to anchor on, so nothing matches.
     await user.click(screen.getByRole("button", { name: "Mark as Invoiced" }));
     await user.click(screen.getByRole("button", { name: "Yes" }));
     expect(await screen.findByText(/No time entries match this filter/i)).toBeInTheDocument();
 
-    // Clear filters unchecks the toggle and re-enables the date inputs.
+    // Clear filters unchecks the toggle and restores the manually-entered From date.
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
-    expect(screen.getByLabelText("All uninvoiced hours")).not.toBeChecked();
+    expect(screen.getByLabelText("Earliest date")).not.toBeChecked();
     expect(screen.getByLabelText("From")).not.toBeDisabled();
+    expect(screen.getByLabelText("From").value).toBe("2100-01-01");
   });
 
   it("marks filtered entries as invoiced, locking them in the timesheet, and can be unmarked", async () => {

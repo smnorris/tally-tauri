@@ -954,7 +954,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
   const [filterClientId, setFilterClientId] = useState("");
   const [filterProjectId, setFilterProjectId] = useState("");
   const [filterTaskId, setFilterTaskId] = useState("");
-  const [uninvoicedOnly, setUninvoicedOnly] = useState(false);
+  const [earliestDateMode, setEarliestDateMode] = useState(false);
 
   const projectById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
   const taskById = useMemo(() => Object.fromEntries(tasks.map((t) => [t.id, t])), [tasks]);
@@ -993,22 +993,38 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
     }
   };
 
+  // Matches the client/project/task filters (but not the date range) - used to
+  // find the oldest outstanding entry for the "Earliest date" toggle.
+  const matchesClientProjectTask = (e) => {
+    if (filterTaskId && e.taskId !== filterTaskId) return false;
+    if (filterProjectId && e.projectId !== filterProjectId) return false;
+    if (filterClientId) {
+      const project = projectById[e.projectId];
+      if (!project || project.clientId !== filterClientId) return false;
+    }
+    return true;
+  };
+
+  const earliestUninvoicedDate = useMemo(() => {
+    let earliest = null;
+    for (const e of entries) {
+      if (e.invoiced) continue;
+      if (!matchesClientProjectTask(e)) continue;
+      if (earliest === null || e.date < earliest) earliest = e.date;
+    }
+    return earliest;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, filterClientId, filterProjectId, filterTaskId, projectById]);
+
+  const effectiveFrom = earliestDateMode ? earliestUninvoicedDate : range.from;
+
   const entriesInRange = useMemo(() => {
     return entries.filter((e) => {
-      if (uninvoicedOnly) {
-        if (e.invoiced) return false;
-      } else if (e.date < range.from || e.date > range.to) {
-        return false;
-      }
-      if (filterTaskId && e.taskId !== filterTaskId) return false;
-      if (filterProjectId && e.projectId !== filterProjectId) return false;
-      if (filterClientId) {
-        const project = projectById[e.projectId];
-        if (!project || project.clientId !== filterClientId) return false;
-      }
-      return true;
+      if (effectiveFrom === null || e.date < effectiveFrom || e.date > range.to) return false;
+      return matchesClientProjectTask(e);
     });
-  }, [entries, range, filterClientId, filterProjectId, filterTaskId, projectById, uninvoicedOnly]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, effectiveFrom, range.to, filterClientId, filterProjectId, filterTaskId, projectById]);
 
   const byTaskProject = useMemo(() => {
     const m = {};
@@ -1054,44 +1070,49 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
   return (
     <div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
-        <Field label="From">
-          <input
-            type="date"
-            style={{ ...inputStyle, ...(uninvoicedOnly ? disabledInputStyle : null) }}
-            value={range.from}
-            disabled={uninvoicedOnly}
-            onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))}
-          />
-        </Field>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <Field label="From">
+            <input
+              type="date"
+              style={{ ...inputStyle, ...(earliestDateMode ? disabledInputStyle : null) }}
+              value={effectiveFrom || ""}
+              disabled={earliestDateMode}
+              title={
+                earliestDateMode && !earliestUninvoicedDate
+                  ? "No uninvoiced hours match the filters below"
+                  : undefined
+              }
+              onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))}
+            />
+          </Field>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontFamily: FONT_UI,
+              fontSize: 12,
+              color: COLORS.inkFaint,
+              cursor: "pointer",
+            }}
+            title="Set the From date to the oldest uninvoiced entry matching the filters below"
+          >
+            <input
+              type="checkbox"
+              checked={earliestDateMode}
+              onChange={(e) => setEarliestDateMode(e.target.checked)}
+            />
+            Earliest date
+          </label>
+        </div>
         <Field label="To">
           <input
             type="date"
-            style={{ ...inputStyle, ...(uninvoicedOnly ? disabledInputStyle : null) }}
+            style={inputStyle}
             value={range.to}
-            disabled={uninvoicedOnly}
             onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))}
           />
         </Field>
-        <label
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            fontFamily: FONT_UI,
-            fontSize: 13,
-            color: COLORS.inkSoft,
-            cursor: "pointer",
-            paddingBottom: 8,
-          }}
-          title="Show every uninvoiced entry matching the filters below, regardless of date"
-        >
-          <input
-            type="checkbox"
-            checked={uninvoicedOnly}
-            onChange={(e) => setUninvoicedOnly(e.target.checked)}
-          />
-          All uninvoiced hours
-        </label>
         <Field label="Client">
           <select style={inputStyle} value={filterClientId} onChange={(e) => handleClientFilterChange(e.target.value)}>
             <option value="">All clients</option>
@@ -1116,13 +1137,13 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
             ))}
           </select>
         </Field>
-        {(filterClientId || filterProjectId || filterTaskId || uninvoicedOnly) && (
+        {(filterClientId || filterProjectId || filterTaskId || earliestDateMode) && (
           <button
             onClick={() => {
               setFilterClientId("");
               setFilterProjectId("");
               setFilterTaskId("");
-              setUninvoicedOnly(false);
+              setEarliestDateMode(false);
             }}
             style={linkButtonStyle}
           >
@@ -1149,7 +1170,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
             {total}h/{fmtUSD(totalAmount)}
           </span>
           <span style={{ fontFamily: FONT_UI, fontSize: 13, color: COLORS.inkSoft }}>
-            {uninvoicedOnly ? "all uninvoiced hours" : `tracked from ${range.from} to ${range.to}`}
+            tracked from {effectiveFrom || "?"} to {range.to}
           </span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
@@ -1157,7 +1178,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
             <button
               onClick={() =>
                 downloadCSV(
-                  uninvoicedOnly ? "tally-report-uninvoiced.csv" : `tally-report-${range.from}-to-${range.to}.csv`,
+                  `tally-report-${effectiveFrom || "none"}-to-${range.to}.csv`,
                   ["folder", "task", "date", "duration_decimal", "hourly_rate"],
                   entriesInRange.map((e) => {
                     const task = taskById[e.taskId];
