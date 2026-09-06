@@ -270,6 +270,45 @@ describe("Tally app", () => {
     expect(taskFilter.value).toBe("");
   });
 
+  it("shows all uninvoiced hours regardless of date via the uninvoiced-only toggle", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await createClientProjectTask(user);
+    await addPairToTimesheet(user);
+    const hourInputs = screen.getAllByRole("spinbutton");
+    await user.type(hourInputs[0], "3");
+    await screen.findByText("3h this week");
+
+    // Narrow the date range so today's entry is excluded.
+    await user.click(screen.getByRole("button", { name: "Report" }));
+    const fromInput = await screen.findByLabelText("From");
+    const toInput = screen.getByLabelText("To");
+    fireEvent.change(fromInput, { target: { value: "2000-01-01" } });
+    fireEvent.change(toInput, { target: { value: "2000-01-02" } });
+    expect(await screen.findByText(/No time entries match this filter/i)).toBeInTheDocument();
+
+    // Checking "All uninvoiced hours" ignores the date range entirely and disables it.
+    await user.click(screen.getByLabelText("All uninvoiced hours"));
+    expect(await screen.findByText("3h/$0")).toBeInTheDocument();
+    expect(screen.getByLabelText("From")).toBeDisabled();
+    expect(screen.getByLabelText("To")).toBeDisabled();
+
+    // It still composes with the client/project/task filters.
+    await user.selectOptions(screen.getByLabelText("Client"), "Acme Corp");
+    expect(await screen.findByText("3h/$0")).toBeInTheDocument();
+
+    // Once the entry is marked invoiced, it drops out of the uninvoiced-only view.
+    await user.click(screen.getByRole("button", { name: "Mark as Invoiced" }));
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(await screen.findByText(/No time entries match this filter/i)).toBeInTheDocument();
+
+    // Clear filters unchecks the toggle and re-enables the date inputs.
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByLabelText("All uninvoiced hours")).not.toBeChecked();
+    expect(screen.getByLabelText("From")).not.toBeDisabled();
+  });
+
   it("marks filtered entries as invoiced, locking them in the timesheet, and can be unmarked", async () => {
     const user = userEvent.setup();
     render(<App />);

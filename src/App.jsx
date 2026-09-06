@@ -125,6 +125,11 @@ const inputStyle = {
   outline: "none",
 };
 
+const disabledInputStyle = {
+  opacity: 0.5,
+  cursor: "not-allowed",
+};
+
 const buttonStyle = {
   fontFamily: FONT_UI,
   fontSize: 14,
@@ -949,6 +954,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
   const [filterClientId, setFilterClientId] = useState("");
   const [filterProjectId, setFilterProjectId] = useState("");
   const [filterTaskId, setFilterTaskId] = useState("");
+  const [uninvoicedOnly, setUninvoicedOnly] = useState(false);
 
   const projectById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
   const taskById = useMemo(() => Object.fromEntries(tasks.map((t) => [t.id, t])), [tasks]);
@@ -989,7 +995,11 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
 
   const entriesInRange = useMemo(() => {
     return entries.filter((e) => {
-      if (e.date < range.from || e.date > range.to) return false;
+      if (uninvoicedOnly) {
+        if (e.invoiced) return false;
+      } else if (e.date < range.from || e.date > range.to) {
+        return false;
+      }
       if (filterTaskId && e.taskId !== filterTaskId) return false;
       if (filterProjectId && e.projectId !== filterProjectId) return false;
       if (filterClientId) {
@@ -998,7 +1008,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
       }
       return true;
     });
-  }, [entries, range, filterClientId, filterProjectId, filterTaskId, projectById]);
+  }, [entries, range, filterClientId, filterProjectId, filterTaskId, projectById, uninvoicedOnly]);
 
   const byTaskProject = useMemo(() => {
     const m = {};
@@ -1047,19 +1057,41 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
         <Field label="From">
           <input
             type="date"
-            style={inputStyle}
+            style={{ ...inputStyle, ...(uninvoicedOnly ? disabledInputStyle : null) }}
             value={range.from}
+            disabled={uninvoicedOnly}
             onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))}
           />
         </Field>
         <Field label="To">
           <input
             type="date"
-            style={inputStyle}
+            style={{ ...inputStyle, ...(uninvoicedOnly ? disabledInputStyle : null) }}
             value={range.to}
+            disabled={uninvoicedOnly}
             onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))}
           />
         </Field>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontFamily: FONT_UI,
+            fontSize: 13,
+            color: COLORS.inkSoft,
+            cursor: "pointer",
+            paddingBottom: 8,
+          }}
+          title="Show every uninvoiced entry matching the filters below, regardless of date"
+        >
+          <input
+            type="checkbox"
+            checked={uninvoicedOnly}
+            onChange={(e) => setUninvoicedOnly(e.target.checked)}
+          />
+          All uninvoiced hours
+        </label>
         <Field label="Client">
           <select style={inputStyle} value={filterClientId} onChange={(e) => handleClientFilterChange(e.target.value)}>
             <option value="">All clients</option>
@@ -1084,12 +1116,13 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
             ))}
           </select>
         </Field>
-        {(filterClientId || filterProjectId || filterTaskId) && (
+        {(filterClientId || filterProjectId || filterTaskId || uninvoicedOnly) && (
           <button
             onClick={() => {
               setFilterClientId("");
               setFilterProjectId("");
               setFilterTaskId("");
+              setUninvoicedOnly(false);
             }}
             style={linkButtonStyle}
           >
@@ -1116,7 +1149,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
             {total}h/{fmtUSD(totalAmount)}
           </span>
           <span style={{ fontFamily: FONT_UI, fontSize: 13, color: COLORS.inkSoft }}>
-            tracked from {range.from} to {range.to}
+            {uninvoicedOnly ? "all uninvoiced hours" : `tracked from ${range.from} to ${range.to}`}
           </span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
@@ -1124,7 +1157,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
             <button
               onClick={() =>
                 downloadCSV(
-                  `tally-report-${range.from}-to-${range.to}.csv`,
+                  uninvoicedOnly ? "tally-report-uninvoiced.csv" : `tally-report-${range.from}-to-${range.to}.csv`,
                   ["folder", "task", "date", "duration_decimal", "hourly_rate"],
                   entriesInRange.map((e) => {
                     const task = taskById[e.taskId];
