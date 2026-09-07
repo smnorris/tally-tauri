@@ -6,6 +6,16 @@ small. Single user, no network sync — data is plain JSON files on disk.
 
 110% vibes.
 
+## Screenshots
+
+| Timesheet | Report |
+| --- | --- |
+| ![Timesheet tab](docs/screenshots/timesheet.png) | ![Report tab](docs/screenshots/report.png) |
+
+| Clients | Projects | Tasks |
+| --- | --- | --- |
+| ![Clients tab](docs/screenshots/clients.png) | ![Projects tab](docs/screenshots/projects.png) | ![Tasks tab](docs/screenshots/tasks.png) |
+
 ## Requirements
 
 - Node.js 18+ and npm
