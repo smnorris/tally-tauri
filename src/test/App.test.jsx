@@ -217,11 +217,12 @@ describe("Tally app", () => {
     await user.click(screen.getByRole("button", { name: "Export CSV" }));
     expect(clickSpy).toHaveBeenCalledTimes(1);
 
-    // One row per time entry, Timemator's expected columns.
+    // One row per time entry, Timemator's expected columns. The task column
+    // concatenates project and task name, separated by " - ".
     const lines = capturedText.split("\r\n");
     expect(lines[0]).toBe("folder,task,date,duration_decimal,hourly_rate");
     expect(lines[1]).toContain("Acme Corp");
-    expect(lines[1]).toContain("Homepage layout");
+    expect(lines[1]).toContain("Website redesign - Homepage layout");
     expect(lines[1]).toContain("4");
 
     clickSpy.mockRestore();

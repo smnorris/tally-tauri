@@ -1192,9 +1192,11 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
                     const task = taskById[e.taskId];
                     const project = projectById[e.projectId];
                     const client = project ? clientById[project.clientId] : null;
+                    const projectName = project?.name || "Unknown project";
+                    const taskName = task?.name || "Unknown task";
                     return [
                       client?.name || "No client",
-                      task?.name || "Unknown task",
+                      `${projectName} - ${taskName}`,
                       e.date,
                       round2(e.hours),
                       project?.hourlyRate || "",
