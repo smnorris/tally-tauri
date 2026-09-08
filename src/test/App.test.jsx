@@ -295,7 +295,7 @@ describe("Tally app", () => {
     // Checking "Earliest date" overrides the manual From with the oldest
     // uninvoiced entry's date matching the filters below, and disables From
     // (but not To) for manual editing.
-    await user.click(screen.getByLabelText("Earliest date"));
+    await user.click(screen.getByLabelText("Earliest date (uninvoiced)"));
     expect(await screen.findByText("3h/$0")).toBeInTheDocument();
     expect(screen.getByLabelText("From")).toBeDisabled();
     expect(screen.getByLabelText("From").value).toBe(entryDate);
@@ -313,7 +313,7 @@ describe("Tally app", () => {
 
     // Clear filters unchecks the toggle and restores the manually-entered From date.
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
-    expect(screen.getByLabelText("Earliest date")).not.toBeChecked();
+    expect(screen.getByLabelText("Earliest date (uninvoiced)")).not.toBeChecked();
     expect(screen.getByLabelText("From")).not.toBeDisabled();
     expect(screen.getByLabelText("From").value).toBe("2100-01-01");
   });

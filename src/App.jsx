@@ -1107,7 +1107,7 @@ function ReportsTab({ entries, tasks, projects, clients, clientById, onSetInvoic
               checked={earliestDateMode}
               onChange={(e) => setEarliestDateMode(e.target.checked)}
             />
-            Earliest date
+            Earliest date (uninvoiced)
           </label>
         </div>
         <Field label="To">
